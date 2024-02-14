@@ -49,7 +49,7 @@ _default_query = "Who said 'live long and prosper'?"
 # behave differently, and we haven't tuned the prompt to make it optimal - this
 # is left to you, application creators, as an open problem.
 _rag_query_text = """
-You are a large language AI assistant built by Lepton AI. You are given a user question, and please write clean, concise and accurate answer to the question. You will be given a set of related contexts to the question, each starting with a reference number like [[citation:x]], where x is a number. Please use the context and cite the context at the end of each sentence if applicable.
+You are an AI assistant built by Heurist AI. You are given a user question, and please write clean, concise and accurate answer to the question. You will be given a set of related contexts to the question, each starting with a reference number like [[citation:x]], where x is a number. Please use the context and cite the context at the end of each sentence if applicable.
 
 Your answer must be correct, accurate and written by an expert using an unbiased and professional tone. Please limit to 1024 tokens. Do not give any information that is not related to the question, and do not repeat. Say "information is missing on" followed by the related topic, if the given context do not provide sufficient information.
 
@@ -353,7 +353,8 @@ class RAG(Photon):
     # concurrent.
     handler_max_concurrency = 16
 
-    def local_client(self):
+    # TODO: Heurist LLM API does not support function tools yet
+    def local_function_client(self):
         """
         Gets a thread-local client, so in case openai clients are not thread safe,
         each thread will have its own client.
@@ -368,6 +369,26 @@ class RAG(Photon):
                 base_url=f"https://{self.model}.lepton.run/api/v1/",
                 api_key=os.environ.get("LEPTON_WORKSPACE_TOKEN")
                 or WorkspaceInfoLocalRecord.get_current_workspace_token(),
+                # We will set the connect timeout to be 10 seconds, and read/write
+                # timeout to be 120 seconds, in case the inference server is
+                # overloaded.
+                timeout=httpx.Timeout(connect=10, read=120, write=120, pool=10),
+            )
+            return thread_local.client
+        
+    def local_heurist_client(self):
+        """
+        Gets a thread-local client for the Heurist API.
+        """
+        import openai
+
+        thread_local = threading.local()
+        try:
+            return thread_local.client
+        except AttributeError:
+            thread_local.client = openai.OpenAI(
+                base_url=f"https://llm-gateway.heurist.xyz",
+                api_key=os.environ.get("HEURIST_AUTH_KEY"),
                 # We will set the connect timeout to be 10 seconds, and read/write
                 # timeout to be 120 seconds, in case the inference server is
                 # overloaded.
@@ -452,7 +473,7 @@ class RAG(Photon):
             pass
 
         try:
-            response = self.local_client().chat.completions.create(
+            response = self.local_function_client().chat.completions.create(
                 model=self.model,
                 messages=[
                     {
@@ -596,9 +617,9 @@ class RAG(Photon):
             )
         )
         try:
-            client = self.local_client()
+            client = self.local_heurist_client()
             llm_response = client.chat.completions.create(
-                model=self.model,
+                model="mistralai/mixtral-8x7b-instruct-v0.1",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": query},
